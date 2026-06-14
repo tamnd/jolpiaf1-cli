@@ -1,37 +1,31 @@
 // Package jolpiaf1 is the library behind the jolpiaf1 command line:
-// the HTTP client, request shaping, and the typed data models for jolpiaf1.
-//
-// The Client here is the spine every command shares. It sets a real
-// User-Agent, paces requests so a busy session stays polite, and retries the
-// transient failures (429 and 5xx) that any public site throws under load.
-// Build your endpoint calls and JSON decoding on top of it.
+// the HTTP client, request shaping, and typed data models for the
+// Jolpica F1 API (https://api.jolpi.ca/ergast/f1/), an open-source
+// mirror of the Ergast Formula 1 API. No API key required.
 package jolpiaf1
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"strings"
 	"time"
 )
 
-// DefaultUserAgent identifies the client to jolpiaf1. A real, honest
-// User-Agent is both polite and the thing most likely to keep you unblocked.
-const DefaultUserAgent = "jolpiaf1/dev (+https://github.com/tamnd/jolpiaf1-cli)"
-
-// Host is the site this client talks to, and the host the URI driver in
-// domain.go claims. The scaffold points it at jolpiaf1.com; change it once you
-// know the real endpoints you want to read.
-const Host = "jolpiaf1.com"
+// Host is the API host this client talks to.
+const Host = "api.jolpi.ca"
 
 // BaseURL is the root every request is built from.
 const BaseURL = "https://" + Host
 
-// Client talks to jolpiaf1 over HTTP.
+// DefaultUserAgent identifies the client to the Jolpica API.
+const DefaultUserAgent = "jolpiaf1-cli/0.1 (tamnd87@gmail.com)"
+
+// Client talks to the Jolpica F1 API over HTTPS.
 type Client struct {
 	HTTP      *http.Client
+	BaseURL   string
 	UserAgent string
 	// Rate is the minimum gap between requests. Zero means no pacing.
 	Rate    time.Duration
@@ -40,20 +34,20 @@ type Client struct {
 	last time.Time
 }
 
-// NewClient returns a Client with sensible defaults: a 30s timeout, a 200ms
-// minimum gap between requests, and five retries on transient errors.
+// NewClient returns a Client with sensible defaults: 15s timeout,
+// 200ms minimum gap between requests, and 3 retries on transient errors.
 func NewClient() *Client {
 	return &Client{
-		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		HTTP:      &http.Client{Timeout: 15 * time.Second},
+		BaseURL:   BaseURL,
 		UserAgent: DefaultUserAgent,
 		Rate:      200 * time.Millisecond,
-		Retries:   5,
+		Retries:   3,
 	}
 }
 
-// Get fetches url and returns the response body. It paces and retries according
-// to the client's settings. The caller owns nothing extra; the body is read
-// fully and closed here.
+// Get fetches url and returns the response body. It paces and retries
+// according to the client's settings.
 func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.Retries; attempt++ {
@@ -104,7 +98,6 @@ func (c *Client) do(ctx context.Context, url string) (body []byte, retry bool, e
 	return b, false, nil
 }
 
-// pace blocks until at least Rate has passed since the previous request.
 func (c *Client) pace() {
 	if c.Rate <= 0 {
 		return
@@ -123,78 +116,292 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-// Page is the scaffold's one example record: a single page, addressed by the
-// path that names it on jolpiaf1.com. It is a stand-in for the typed records you
-// will model from the real jolpiaf1 endpoints. The kit struct tags make it
-// addressable as a resource URI (see domain.go): ID is the URI id, and Body is
-// the long text `jolpiaf1 cat` and the Markdown export print.
-type Page struct {
-	ID    string `json:"id" kit:"id"`
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty" kit:"body"`
+// ---- typed data models ----
+
+// RaceResult is one driver's result in a race.
+type RaceResult struct {
+	Position    string `kit:"id" json:"position"`
+	Driver      string `json:"driver"`      // "Max Verstappen (VER)"
+	Constructor string `json:"constructor"`
+	Grid        string `json:"grid"`
+	Points      string `json:"points"`
+	Status      string `json:"status"`
+	Time        string `json:"time"`   // Results[].Time.time or ""
+	Race        string `json:"race"`   // raceName
 }
 
-// GetPage fetches one page by its path (for example "wiki/Go") and returns it as
-// a record. The scaffold keeps a plain-text preview of the response as the body;
-// replace the parsing with the real fields once you know the endpoint's shape.
-func (c *Client) GetPage(ctx context.Context, path string) (*Page, error) {
-	path = strings.Trim(path, "/")
-	url := BaseURL + "/" + path
+// Standing is one row in a driver or constructor standings table.
+type Standing struct {
+	Position string `kit:"id" json:"position"`
+	Name     string `json:"name"`
+	Code     string `json:"code"`  // driver code e.g. "VER" or constructorId
+	Team     string `json:"team"`
+	Points   string `json:"points"`
+	Wins     string `json:"wins"`
+}
+
+// Race is one race weekend in a season schedule.
+type Race struct {
+	Round   string `kit:"id" json:"round"`
+	Name    string `json:"name"`
+	Circuit string `json:"circuit"`
+	Country string `json:"country"`
+	Date    string `json:"date"`
+	Time    string `json:"time"`
+}
+
+// Driver holds information about a Formula 1 driver.
+type Driver struct {
+	ID          string `kit:"id" json:"id"`
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	Number      string `json:"number"`
+	Nationality string `json:"nationality"`
+	Born        string `json:"born"`
+}
+
+// ---- API response shapes (unexported) ----
+
+type mrData struct {
+	RaceTable      *raceTableResp      `json:"RaceTable"`
+	StandingsTable *standingsTableResp `json:"StandingsTable"`
+	DriverTable    *driverTableResp    `json:"DriverTable"`
+}
+
+type apiResp struct {
+	MRData mrData `json:"MRData"`
+}
+
+type raceTableResp struct {
+	Races []raceResp `json:"Races"`
+}
+
+type raceResp struct {
+	Season   string       `json:"season"`
+	Round    string       `json:"round"`
+	RaceName string       `json:"raceName"`
+	Circuit  circuitResp  `json:"Circuit"`
+	Date     string       `json:"date"`
+	Time     string       `json:"time"`
+	Results  []resultResp `json:"Results"`
+}
+
+type circuitResp struct {
+	CircuitName string       `json:"circuitName"`
+	Location    locationResp `json:"Location"`
+}
+
+type locationResp struct {
+	Locality string `json:"locality"`
+	Country  string `json:"country"`
+}
+
+type resultResp struct {
+	Position    string      `json:"position"`
+	Points      string      `json:"points"`
+	Grid        string      `json:"grid"`
+	Status      string      `json:"status"`
+	Driver      driverResp  `json:"Driver"`
+	Constructor constructorResp `json:"Constructor"`
+	Time        *raceTime   `json:"Time"`
+}
+
+type raceTime struct {
+	Time string `json:"time"`
+}
+
+type driverResp struct {
+	DriverID    string `json:"driverId"`
+	Code        string `json:"code"`
+	GivenName   string `json:"givenName"`
+	FamilyName  string `json:"familyName"`
+	DateOfBirth string `json:"dateOfBirth"`
+	Nationality string `json:"nationality"`
+	PermanentNumber string `json:"permanentNumber"`
+}
+
+type constructorResp struct {
+	ConstructorID string `json:"constructorId"`
+	Name          string `json:"name"`
+	Nationality   string `json:"nationality"`
+}
+
+type standingsTableResp struct {
+	StandingsLists []standingsListResp `json:"StandingsLists"`
+}
+
+type standingsListResp struct {
+	DriverStandings      []driverStandingResp      `json:"DriverStandings"`
+	ConstructorStandings []constructorStandingResp  `json:"ConstructorStandings"`
+}
+
+type driverStandingResp struct {
+	Position     string          `json:"position"`
+	Points       string          `json:"points"`
+	Wins         string          `json:"wins"`
+	Driver       driverResp      `json:"Driver"`
+	Constructors []constructorResp `json:"Constructors"`
+}
+
+type constructorStandingResp struct {
+	Position    string          `json:"position"`
+	Points      string          `json:"points"`
+	Wins        string          `json:"wins"`
+	Constructor constructorResp `json:"Constructor"`
+}
+
+type driverTableResp struct {
+	Drivers []driverResp `json:"Drivers"`
+}
+
+// ---- client methods ----
+
+// Results fetches race results for the given year and round.
+func (c *Client) Results(ctx context.Context, year, round string, limit int) ([]*RaceResult, error) {
+	url := fmt.Sprintf("%s/ergast/f1/%s/%s/results.json?limit=%d", c.BaseURL, year, round, limit)
 	body, err := c.Get(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	return &Page{ID: path, URL: url, Title: path, Body: pageText(body)}, nil
-}
-
-// PageLinks fetches a page and returns the same-host pages it links to, as page
-// stubs. It shows the member-listing pattern the URI driver relies on: every
-// stub carries enough (an id and a URL) to be addressed and followed on its own.
-func (c *Client) PageLinks(ctx context.Context, path string, limit int) ([]*Page, error) {
-	path = strings.Trim(path, "/")
-	body, err := c.Get(ctx, BaseURL+"/"+path)
-	if err != nil {
-		return nil, err
+	var resp apiResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
 	}
-	var out []*Page
-	seen := map[string]bool{}
-	for _, p := range linkPaths(body) {
-		if seen[p] {
-			continue
+	if resp.MRData.RaceTable == nil || len(resp.MRData.RaceTable.Races) == 0 {
+		return nil, nil
+	}
+	race := resp.MRData.RaceTable.Races[0]
+	out := make([]*RaceResult, 0, len(race.Results))
+	for _, r := range race.Results {
+		t := ""
+		if r.Time != nil {
+			t = r.Time.Time
 		}
-		seen[p] = true
-		out = append(out, &Page{ID: p, URL: BaseURL + "/" + p})
-		if limit > 0 && len(out) >= limit {
-			break
-		}
+		out = append(out, &RaceResult{
+			Position:    r.Position,
+			Driver:      r.Driver.GivenName + " " + r.Driver.FamilyName + " (" + r.Driver.Code + ")",
+			Constructor: r.Constructor.Name,
+			Grid:        r.Grid,
+			Points:      r.Points,
+			Status:      r.Status,
+			Time:        t,
+			Race:        race.RaceName,
+		})
 	}
 	return out, nil
 }
 
-var (
-	hrefRE = regexp.MustCompile(`href="(/[^":#?]+)"`)
-	tagRE  = regexp.MustCompile(`<[^>]+>`)
-)
-
-// linkPaths pulls the relative link targets out of an HTML response, so a list
-// op can turn each into an addressable page stub.
-func linkPaths(body []byte) []string {
-	var out []string
-	for _, m := range hrefRE.FindAllSubmatch(body, -1) {
-		if p := strings.Trim(string(m[1]), "/"); p != "" {
-			out = append(out, p)
-		}
+// DriverStandings fetches the driver championship standings for the given year.
+func (c *Client) DriverStandings(ctx context.Context, year string) ([]*Standing, error) {
+	url := fmt.Sprintf("%s/ergast/f1/%s/driverStandings.json", c.BaseURL, year)
+	body, err := c.Get(ctx, url)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	var resp apiResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if resp.MRData.StandingsTable == nil || len(resp.MRData.StandingsTable.StandingsLists) == 0 {
+		return nil, nil
+	}
+	list := resp.MRData.StandingsTable.StandingsLists[0]
+	out := make([]*Standing, 0, len(list.DriverStandings))
+	for _, s := range list.DriverStandings {
+		team := ""
+		if len(s.Constructors) > 0 {
+			team = s.Constructors[0].Name
+		}
+		out = append(out, &Standing{
+			Position: s.Position,
+			Name:     s.Driver.GivenName + " " + s.Driver.FamilyName,
+			Code:     s.Driver.Code,
+			Team:     team,
+			Points:   s.Points,
+			Wins:     s.Wins,
+		})
+	}
+	return out, nil
 }
 
-// pageText reduces an HTML response to a short plain-text preview, a stand-in
-// for the typed extract a real endpoint would hand you.
-func pageText(body []byte) string {
-	s := strings.Join(strings.Fields(tagRE.ReplaceAllString(string(body), " ")), " ")
-	if len(s) > 500 {
-		s = s[:500]
+// ConstructorStandings fetches the constructor championship standings for the given year.
+func (c *Client) ConstructorStandings(ctx context.Context, year string) ([]*Standing, error) {
+	url := fmt.Sprintf("%s/ergast/f1/%s/constructorStandings.json", c.BaseURL, year)
+	body, err := c.Get(ctx, url)
+	if err != nil {
+		return nil, err
 	}
-	return s
+	var resp apiResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if resp.MRData.StandingsTable == nil || len(resp.MRData.StandingsTable.StandingsLists) == 0 {
+		return nil, nil
+	}
+	list := resp.MRData.StandingsTable.StandingsLists[0]
+	out := make([]*Standing, 0, len(list.ConstructorStandings))
+	for _, s := range list.ConstructorStandings {
+		out = append(out, &Standing{
+			Position: s.Position,
+			Name:     s.Constructor.Name,
+			Code:     s.Constructor.ConstructorID,
+			Team:     "",
+			Points:   s.Points,
+			Wins:     s.Wins,
+		})
+	}
+	return out, nil
+}
+
+// Races fetches the race schedule for the given season year.
+func (c *Client) Races(ctx context.Context, year string) ([]*Race, error) {
+	url := fmt.Sprintf("%s/ergast/f1/%s.json", c.BaseURL, year)
+	body, err := c.Get(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	var resp apiResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if resp.MRData.RaceTable == nil {
+		return nil, nil
+	}
+	out := make([]*Race, 0, len(resp.MRData.RaceTable.Races))
+	for _, r := range resp.MRData.RaceTable.Races {
+		out = append(out, &Race{
+			Round:   r.Round,
+			Name:    r.RaceName,
+			Circuit: r.Circuit.CircuitName,
+			Country: r.Circuit.Location.Country,
+			Date:    r.Date,
+			Time:    r.Time,
+		})
+	}
+	return out, nil
+}
+
+// GetDriver fetches information about a driver by their Ergast driver ID.
+func (c *Client) GetDriver(ctx context.Context, driverID string) (*Driver, error) {
+	url := fmt.Sprintf("%s/ergast/f1/drivers/%s.json", c.BaseURL, driverID)
+	body, err := c.Get(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	var resp apiResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if resp.MRData.DriverTable == nil || len(resp.MRData.DriverTable.Drivers) == 0 {
+		return nil, fmt.Errorf("driver not found: %s", driverID)
+	}
+	d := resp.MRData.DriverTable.Drivers[0]
+	return &Driver{
+		ID:          d.DriverID,
+		Name:        d.GivenName + " " + d.FamilyName,
+		Code:        d.Code,
+		Number:      d.PermanentNumber,
+		Nationality: d.Nationality,
+		Born:        d.DateOfBirth,
+	}, nil
 }
