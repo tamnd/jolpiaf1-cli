@@ -121,20 +121,20 @@ func backoff(attempt int) time.Duration {
 // RaceResult is one driver's result in a race.
 type RaceResult struct {
 	Position    string `kit:"id" json:"position"`
-	Driver      string `json:"driver"`      // "Max Verstappen (VER)"
+	Driver      string `json:"driver"` // "Max Verstappen (VER)"
 	Constructor string `json:"constructor"`
 	Grid        string `json:"grid"`
 	Points      string `json:"points"`
 	Status      string `json:"status"`
-	Time        string `json:"time"`   // Results[].Time.time or ""
-	Race        string `json:"race"`   // raceName
+	Time        string `json:"time"` // Results[].Time.time or ""
+	Race        string `json:"race"` // raceName
 }
 
 // Standing is one row in a driver or constructor standings table.
 type Standing struct {
 	Position string `kit:"id" json:"position"`
 	Name     string `json:"name"`
-	Code     string `json:"code"`  // driver code e.g. "VER" or constructorId
+	Code     string `json:"code"` // driver code e.g. "VER" or constructorId
 	Team     string `json:"team"`
 	Points   string `json:"points"`
 	Wins     string `json:"wins"`
@@ -197,13 +197,13 @@ type locationResp struct {
 }
 
 type resultResp struct {
-	Position    string      `json:"position"`
-	Points      string      `json:"points"`
-	Grid        string      `json:"grid"`
-	Status      string      `json:"status"`
-	Driver      driverResp  `json:"Driver"`
+	Position    string          `json:"position"`
+	Points      string          `json:"points"`
+	Grid        string          `json:"grid"`
+	Status      string          `json:"status"`
+	Driver      driverResp      `json:"Driver"`
 	Constructor constructorResp `json:"Constructor"`
-	Time        *raceTime   `json:"Time"`
+	Time        *raceTime       `json:"Time"`
 }
 
 type raceTime struct {
@@ -211,12 +211,12 @@ type raceTime struct {
 }
 
 type driverResp struct {
-	DriverID    string `json:"driverId"`
-	Code        string `json:"code"`
-	GivenName   string `json:"givenName"`
-	FamilyName  string `json:"familyName"`
-	DateOfBirth string `json:"dateOfBirth"`
-	Nationality string `json:"nationality"`
+	DriverID        string `json:"driverId"`
+	Code            string `json:"code"`
+	GivenName       string `json:"givenName"`
+	FamilyName      string `json:"familyName"`
+	DateOfBirth     string `json:"dateOfBirth"`
+	Nationality     string `json:"nationality"`
 	PermanentNumber string `json:"permanentNumber"`
 }
 
@@ -232,14 +232,14 @@ type standingsTableResp struct {
 
 type standingsListResp struct {
 	DriverStandings      []driverStandingResp      `json:"DriverStandings"`
-	ConstructorStandings []constructorStandingResp  `json:"ConstructorStandings"`
+	ConstructorStandings []constructorStandingResp `json:"ConstructorStandings"`
 }
 
 type driverStandingResp struct {
-	Position     string          `json:"position"`
-	Points       string          `json:"points"`
-	Wins         string          `json:"wins"`
-	Driver       driverResp      `json:"Driver"`
+	Position     string            `json:"position"`
+	Points       string            `json:"points"`
+	Wins         string            `json:"wins"`
+	Driver       driverResp        `json:"Driver"`
 	Constructors []constructorResp `json:"Constructors"`
 }
 

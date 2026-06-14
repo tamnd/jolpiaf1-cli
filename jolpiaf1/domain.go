@@ -77,11 +77,11 @@ func (Domain) Register(app *kit.App) {
 
 	// driver: driver profile
 	kit.Handle(app, kit.OpMeta{
-		Name:    "driver",
-		Group:   "read",
-		Single:  true,
-		Summary: "Get information about a driver",
-		URIType: "driver",
+		Name:     "driver",
+		Group:    "read",
+		Single:   true,
+		Summary:  "Get information about a driver",
+		URIType:  "driver",
 		Resolver: true,
 		Args: []kit.Arg{
 			{Name: "driver_id", Help: "driver ID, e.g. verstappen, hamilton, albon"},
