@@ -1,0 +1,10 @@
+title       = "jolpiaf1"
+baseURL     = "https://jolpiaf1-cli.tamnd.com/"
+description = "A command line for jolpiaf1."
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/jolpiaf1-cli"
