@@ -2,74 +2,94 @@ package jolpiaf1
 
 import (
 	"context"
-	"net/url"
 	"strings"
 
 	"github.com/tamnd/any-cli/kit"
 	"github.com/tamnd/any-cli/kit/errs"
 )
 
-// domain.go exposes jolpiaf1 as a kit Domain: a driver that a multi-domain
-// host (ant) enables with a single blank import,
+// domain.go exposes jolpiaf1 as a kit Domain so a multi-domain host (ant)
+// can enable it with a single blank import:
 //
 //	import _ "github.com/tamnd/jolpiaf1-cli/jolpiaf1"
 //
-// exactly as a database/sql program enables a driver with `import _
-// "github.com/lib/pq"`. The init below registers it; the host then dereferences
-// jolpiaf1:// URIs by routing to the operations Register installs. The same
-// Domain also builds the standalone jolpiaf1 binary (see cli.NewApp), so the
-// binary and a host share one source of truth.
-//
-// This is the scaffold's starting point: one resource type, "page", served by a
-// resolver op and a list op. Add your real types here as you model the site.
+// The same Domain builds the standalone jolpiaf1 binary (see cli.NewApp),
+// so the binary and any host share one source of truth.
 func init() { kit.Register(Domain{}) }
 
-// Domain is the jolpiaf1 driver. It carries no state; the per-run client is
-// built by the factory Register hands kit.
+// Domain is the jolpiaf1 driver. It carries no state; the per-run client
+// is built by the factory Register hands kit.
 type Domain struct{}
 
-// Info describes the scheme, the hostnames a pasted link is matched against, and
-// the identity reused for the binary's help and version.
+// Info describes the scheme, the hostnames a pasted link is matched
+// against, and the identity reused for the binary's help and version.
 func (Domain) Info() kit.DomainInfo {
 	return kit.DomainInfo{
 		Scheme: "jolpiaf1",
 		Hosts:  []string{Host},
 		Identity: kit.Identity{
 			Binary: "jolpiaf1",
-			Short:  "A command line for jolpiaf1.",
-			Long: `A command line for jolpiaf1.
+			Short:  "Formula 1 data from the Jolpica F1 API.",
+			Long: `jolpiaf1 reads public Formula 1 data from the Jolpica F1 API
+(https://api.jolpi.ca/ergast/f1/), an open-source mirror of the
+Ergast API. No API key or sign-up required.
 
-jolpiaf1 reads public jolpiaf1 data over plain HTTPS, shapes it into
-clean records, and prints output that pipes into the rest of your tools. No API
-key, nothing to run alongside it.`,
+Race results, driver and constructor standings, season schedules,
+and driver profiles — all shaped into clean records that pipe
+into the rest of your tools.`,
 			Site: Host,
 			Repo: "https://github.com/tamnd/jolpiaf1-cli",
 		},
 	}
 }
 
-// Register installs the client factory and every operation onto app. A resolver
-// op (Single) names its own record type and answers `ant get`; a List op
-// enumerates a parent resource's members and answers `ant ls`.
+// Register installs the client factory and every operation onto app.
 func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
-	// Resolver op: one record per id, the home of `jolpiaf1 page` and
-	// `ant get jolpiaf1://page/<id>`.
-	kit.Handle(app, kit.OpMeta{Name: "page", Group: "read", Single: true,
-		Summary: "Fetch a page by path or URL", URIType: "page", Resolver: true,
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, getPage)
+	// results: race results for a given year + round
+	kit.Handle(app, kit.OpMeta{
+		Name:    "results",
+		Group:   "read",
+		Single:  false,
+		Summary: "Get race results for a specific grand prix",
+		Args: []kit.Arg{
+			{Name: "year", Help: "season year, e.g. 2024"},
+			{Name: "round", Help: "round number, e.g. 1"},
+		},
+	}, getResults)
 
-	// List op: members of a page, the home of `jolpiaf1 links` and `ant ls`.
-	// It emits page stubs, so every listed member is itself an addressable
-	// jolpiaf1://page/ URI a host can follow.
-	kit.Handle(app, kit.OpMeta{Name: "links", Group: "read", List: true,
-		Summary: "List the pages a page links to", URIType: "page",
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, listLinks)
+	// standings: driver or constructor standings
+	kit.Handle(app, kit.OpMeta{
+		Name:    "standings",
+		Group:   "read",
+		Single:  false,
+		Summary: "Get driver or constructor championship standings",
+	}, getStandings)
+
+	// races: season race schedule
+	kit.Handle(app, kit.OpMeta{
+		Name:    "races",
+		Group:   "read",
+		Single:  false,
+		Summary: "List all races in a season",
+	}, getRaces)
+
+	// driver: driver profile
+	kit.Handle(app, kit.OpMeta{
+		Name:    "driver",
+		Group:   "read",
+		Single:  true,
+		Summary: "Get information about a driver",
+		URIType: "driver",
+		Resolver: true,
+		Args: []kit.Arg{
+			{Name: "driver_id", Help: "driver ID, e.g. verstappen, hamilton, albon"},
+		},
+	}, getDriver)
 }
 
-// newClient builds the client from the host-resolved config, so a host and the
-// standalone binary pace and identify themselves the same way.
+// newClient builds the client from the host-resolved config.
 func newClient(_ context.Context, cfg kit.Config) (any, error) {
 	c := NewClient()
 	if cfg.UserAgent != "" {
@@ -87,87 +107,127 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 	return c, nil
 }
 
-// --- inputs ---
-//
-// Each handler takes a typed input struct. kit fills the fields from the tags:
-// kit:"arg" is a positional argument, kit:"flag,inherit" binds the framework's
-// shared flag of the same name, and kit:"inject" receives the client newClient
-// builds.
+// ---- input structs ----
 
-type pageRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
-	Client *Client `kit:"inject"`
-}
-
-type listRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
+type resultsIn struct {
+	Year   string  `kit:"arg" help:"season year, e.g. 2024"`
+	Round  string  `kit:"arg" help:"round number, e.g. 1"`
 	Limit  int     `kit:"flag,inherit" help:"max results"`
 	Client *Client `kit:"inject"`
 }
 
-// --- handlers ---
-
-func getPage(ctx context.Context, in pageRef, emit func(*Page) error) error {
-	p, err := in.Client.GetPage(ctx, pagePath(in.Ref))
-	if err != nil {
-		return mapErr(err)
-	}
-	return emit(p)
+type standingsIn struct {
+	Year   string  `kit:"flag" help:"season year" default:"2024"`
+	Type   string  `kit:"flag" help:"standings type: driver or constructor" default:"driver"`
+	Client *Client `kit:"inject"`
 }
 
-func listLinks(ctx context.Context, in listRef, emit func(*Page) error) error {
-	pages, err := in.Client.PageLinks(ctx, pagePath(in.Ref), in.Limit)
+type racesIn struct {
+	Year   string  `kit:"flag" help:"season year" default:"2024"`
+	Client *Client `kit:"inject"`
+}
+
+type driverIn struct {
+	DriverID string  `kit:"arg" help:"driver ID, e.g. verstappen"`
+	Client   *Client `kit:"inject"`
+}
+
+// ---- handlers ----
+
+func getResults(ctx context.Context, in resultsIn, emit func(*RaceResult) error) error {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	results, err := in.Client.Results(ctx, in.Year, in.Round, limit)
 	if err != nil {
 		return mapErr(err)
 	}
-	for _, p := range pages {
-		if err := emit(p); err != nil {
+	for _, r := range results {
+		if err := emit(r); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// --- Resolver: the URI-native string functions, pure and network-free ---
-
-// Classify turns any accepted input — a bare path or a full jolpiaf1.com URL —
-// into the canonical (type, id), so `ant resolve` and `ant url` touch no network.
-func (Domain) Classify(input string) (uriType, id string, err error) {
-	id = pagePath(input)
-	if id == "" {
-		return "", "", errs.Usage("unrecognized jolpiaf1 reference: %q", input)
+func getStandings(ctx context.Context, in standingsIn, emit func(*Standing) error) error {
+	typ := strings.ToLower(in.Type)
+	if typ == "" {
+		typ = "driver"
 	}
-	return "page", id, nil
+	year := in.Year
+	if year == "" {
+		year = "2024"
+	}
+
+	var standings []*Standing
+	var err error
+	switch typ {
+	case "constructor", "constructors":
+		standings, err = in.Client.ConstructorStandings(ctx, year)
+	default:
+		standings, err = in.Client.DriverStandings(ctx, year)
+	}
+	if err != nil {
+		return mapErr(err)
+	}
+	for _, s := range standings {
+		if err := emit(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func getRaces(ctx context.Context, in racesIn, emit func(*Race) error) error {
+	year := in.Year
+	if year == "" {
+		year = "2024"
+	}
+	races, err := in.Client.Races(ctx, year)
+	if err != nil {
+		return mapErr(err)
+	}
+	for _, r := range races {
+		if err := emit(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func getDriver(ctx context.Context, in driverIn, emit func(*Driver) error) error {
+	d, err := in.Client.GetDriver(ctx, in.DriverID)
+	if err != nil {
+		return mapErr(err)
+	}
+	return emit(d)
+}
+
+// ---- Resolver: pure string functions, network-free ----
+
+// Classify turns any accepted input into the canonical (type, id).
+func (Domain) Classify(input string) (uriType, id string, err error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", "", errs.Usage("empty jolpiaf1 reference")
+	}
+	return "driver", input, nil
 }
 
 // Locate is the inverse: the live https URL for a (type, id).
 func (Domain) Locate(uriType, id string) (string, error) {
-	if uriType != "page" {
+	switch uriType {
+	case "driver":
+		return BaseURL + "/ergast/f1/drivers/" + id + ".json", nil
+	default:
 		return "", errs.Usage("jolpiaf1 has no resource type %q", uriType)
 	}
-	return BaseURL + "/" + strings.Trim(id, "/"), nil
 }
 
-// --- helpers ---
-
-// pagePath turns any accepted input into the canonical page id: the path of a
-// full URL on this host, or a bare path with its slashes trimmed.
-func pagePath(input string) string {
-	input = strings.TrimSpace(input)
-	if u, err := url.Parse(input); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		return strings.Trim(u.Path, "/")
-	}
-	return strings.Trim(input, "/")
-}
-
-// mapErr converts a library error into the kit error kind that carries the right
-// exit code, so a host renders the same outcomes the standalone binary does. As
-// you add sentinel errors to the library, map them here, for example:
-//
-//	case errors.Is(err, ErrNotFound):
-//		return errs.NotFound("%s", err.Error())
-//	case errors.Is(err, ErrRateLimited):
-//		return errs.RateLimited("%s", err.Error())
+// mapErr converts a library error into the kit error kind that carries
+// the right exit code.
 func mapErr(err error) error {
 	return err
 }
